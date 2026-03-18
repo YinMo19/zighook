@@ -226,15 +226,44 @@ pub fn makeInlineJumpPatch(from_address: u64, to_address: u64) HookError!InlineJ
 ///   emulation plan is returned
 /// - if the opcode is a recognized PC-relative form that the current callback
 ///   context cannot replay correctly, installation fails
+/// - recognized forms are decoded through packed bitfield views so the code
+///   mirrors the architectural instruction layout directly
 pub fn planReplay(address: u64, opcode: u32) HookError!ReplayPlan {
     if ((address & 0b11) != 0) return error.InvalidAddress;
 
-    if (isAdrAdrp(opcode)) return planAdrAdrp(address, opcode);
-    if (isLiteralLoad(opcode)) return planLiteralLoad(address, opcode);
-    if (isUnconditionalImmediateBranch(opcode)) return planImmediateBranch(address, opcode);
-    if (isConditionalImmediateBranch(opcode)) return planConditionalBranch(address, opcode);
-    if (isCompareAndBranch(opcode)) return planCompareAndBranch(address, opcode);
-    if (isTestBitAndBranch(opcode)) return planTestBitAndBranch(address, opcode);
+    const adr_adrp: AdrAdrpInstruction = @bitCast(opcode);
+    if (adr_adrp.fixed_op == adr_adrp_fixed_op) {
+        return planAdrAdrp(address, adr_adrp);
+    }
+
+    const literal_load: LiteralLoadInstruction = @bitCast(opcode);
+    if (literal_load.fixed_low == literal_load_fixed_low and
+        literal_load.fixed_high == literal_load_fixed_high)
+    {
+        return planLiteralLoad(address, literal_load);
+    }
+
+    const unconditional_branch: UnconditionalImmediateBranchInstruction = @bitCast(opcode);
+    if (unconditional_branch.fixed_op == unconditional_immediate_branch_fixed_op) {
+        return planImmediateBranch(address, unconditional_branch);
+    }
+
+    const conditional_branch: ConditionalImmediateBranchInstruction = @bitCast(opcode);
+    if (conditional_branch.fixed_zero == conditional_immediate_branch_fixed_zero and
+        conditional_branch.fixed_op == conditional_immediate_branch_fixed_op)
+    {
+        return planConditionalBranch(address, conditional_branch);
+    }
+
+    const compare_and_branch: CompareAndBranchInstruction = @bitCast(opcode);
+    if (compare_and_branch.fixed_op == compare_and_branch_fixed_op) {
+        return planCompareAndBranch(address, compare_and_branch);
+    }
+
+    const test_bit_and_branch: TestBitAndBranchInstruction = @bitCast(opcode);
+    if (test_bit_and_branch.fixed_op == test_bit_and_branch_fixed_op) {
+        return planTestBitAndBranch(address, test_bit_and_branch);
+    }
 
     return .{ .trampoline = {} };
 }
@@ -342,122 +371,260 @@ fn makeAbsoluteJumpPatch(to_address: u64) InlineJumpPatch {
     return patch;
 }
 
-fn isAdrAdrp(opcode: u32) bool {
-    return (opcode & 0x1F00_0000) == 0x1000_0000;
+/// Packed decoder policy for replay-planned AArch64 instructions.
+///
+/// Every instruction family recognized by the replay planner is described as a
+/// `packed struct(u32)` and decoded with `@bitCast`. This keeps the source
+/// visually aligned with the Arm encoding diagrams.
+///
+/// Important endianness note:
+/// - the packed structs below describe the logical 32-bit instruction word
+/// - callers already materialize that word as a little-endian `u32`
+/// - once the word exists as an integer, `@bitCast` exposes the architectural
+///   bitfields directly
+///
+/// In other words, the code below is intentionally written as a teaching aid
+/// as well as a decoder: the layout types are meant to show how the opcode is
+/// actually partitioned in memory.
+///
+/// `ADR` / `ADRP` immediate-encoding class.
+///
+/// The architectural 21-bit immediate is split across two disjoint fields:
+/// - `immhi` carries bits `[20:2]`
+/// - `immlo` carries bits `[1:0]`
+///
+/// Field order intentionally follows the architectural bit numbering from low
+/// to high bits:
+/// - bits `[4:0]`   -> `rd`
+/// - bits `[23:5]`  -> `immhi`
+/// - bits `[28:24]` -> `fixed_op` (`0b10000` for this encoding class)
+/// - bits `[30:29]` -> `immlo`
+/// - bit  `[31]`    -> `op` (`0` = `ADR`, `1` = `ADRP`)
+const AdrAdrpInstruction = packed struct(u32) {
+    rd: u5,
+    immhi: u19,
+    fixed_op: u5,
+    immlo: u2,
+    op: u1,
+};
+
+/// `LDR (literal)`, `LDRSW (literal)`, and `PRFM (literal)` encoding class.
+///
+/// In Arm's diagrams this class is usually written as:
+/// `opc | 011 | V | 00 | imm19 | Rt`
+///
+/// The packed view keeps that decomposition visible:
+/// - `rt`      -> destination register / prefetch operand
+/// - `imm19`   -> signed PC-relative immediate, scaled by 4
+/// - `fixed_*` -> the opcode-class marker bits
+/// - `v`       -> scalar/vector selector
+/// - `opc`     -> operation/width selector within the class
+const LiteralLoadInstruction = packed struct(u32) {
+    rt: u5,
+    imm19: u19,
+    fixed_low: u2,
+    v: u1,
+    fixed_high: u3,
+    opc: u2,
+};
+
+/// `B` / `BL` immediate branch encoding class.
+///
+/// Layout in low-to-high bit order:
+/// - `imm26`    -> signed PC-relative immediate, scaled by 4
+/// - `fixed_op` -> class tag `0b00101`
+/// - `op`       -> `0` = `B`, `1` = `BL`
+const UnconditionalImmediateBranchInstruction = packed struct(u32) {
+    imm26: u26,
+    fixed_op: u5,
+    op: u1,
+};
+
+/// `B.<cond>` immediate branch encoding class.
+///
+/// Arm documents this form as `01010100 | imm19 | 0 | cond`.
+/// The single zero bit at position 4 is architecturally significant, so it is
+/// kept as an explicit field instead of disappearing into a mask.
+const ConditionalImmediateBranchInstruction = packed struct(u32) {
+    cond: u4,
+    fixed_zero: u1,
+    imm19: u19,
+    fixed_op: u8,
+};
+
+/// `CBZ` / `CBNZ` encoding class.
+///
+/// Arm documents this form as `sf | 011010 | op | imm19 | Rt`.
+/// - `sf` selects 32-bit vs 64-bit register width
+/// - `op` selects zero-vs-nonzero branching
+const CompareAndBranchInstruction = packed struct(u32) {
+    rt: u5,
+    imm19: u19,
+    op: u1,
+    fixed_op: u6,
+    sf: u1,
+};
+
+/// `TBZ` / `TBNZ` encoding class.
+///
+/// Arm documents this form as `b5 | 011011 | op | b40 | imm14 | Rt`.
+/// The tested bit index is physically split across:
+/// - `b40` -> low five bits of the bit index
+/// - `b5`  -> high one bit of the bit index
+const TestBitAndBranchInstruction = packed struct(u32) {
+    rt: u5,
+    imm14: u14,
+    b40: u5,
+    op: u1,
+    fixed_op: u6,
+    b5: u1,
+};
+
+fn assertInstructionWordLayout(comptime T: type, comptime type_name: []const u8) void {
+    if (@bitSizeOf(T) != 32) {
+        @compileError(type_name ++ " must remain a 32-bit packed view.");
+    }
 }
 
-fn isLiteralLoad(opcode: u32) bool {
-    return (opcode & 0x3B00_0000) == 0x1800_0000;
+comptime {
+    assertInstructionWordLayout(AdrAdrpInstruction, "AdrAdrpInstruction");
+    assertInstructionWordLayout(LiteralLoadInstruction, "LiteralLoadInstruction");
+    assertInstructionWordLayout(
+        UnconditionalImmediateBranchInstruction,
+        "UnconditionalImmediateBranchInstruction",
+    );
+    assertInstructionWordLayout(
+        ConditionalImmediateBranchInstruction,
+        "ConditionalImmediateBranchInstruction",
+    );
+    assertInstructionWordLayout(CompareAndBranchInstruction, "CompareAndBranchInstruction");
+    assertInstructionWordLayout(TestBitAndBranchInstruction, "TestBitAndBranchInstruction");
 }
 
-fn isUnconditionalImmediateBranch(opcode: u32) bool {
-    return (opcode & 0x7C00_0000) == 0x1400_0000;
-}
+const adr_adrp_fixed_op: u5 = 0b10000;
+const literal_load_fixed_low: u2 = 0b00;
+const literal_load_fixed_high: u3 = 0b011;
+const unconditional_immediate_branch_fixed_op: u5 = 0b00101;
+const conditional_immediate_branch_fixed_zero: u1 = 0;
+const conditional_immediate_branch_fixed_op: u8 = 0x54;
+const compare_and_branch_fixed_op: u6 = 0b011010;
+const test_bit_and_branch_fixed_op: u6 = 0b011011;
 
-fn isConditionalImmediateBranch(opcode: u32) bool {
-    return (opcode & 0xFF00_0010) == 0x5400_0000;
-}
+/// Decodes `ADR` / `ADRP` into a replay plan.
+///
+/// This decoder intentionally reconstructs the split immediate from the typed
+/// bitfield view:
+/// - `imm21 = (immhi << 2) | immlo`
+/// - `op` chooses between `ADR` and `ADRP`
+fn planAdrAdrp(address: u64, instr: AdrAdrpInstruction) HookError!ReplayPlan {
+    const imm21: u21 = (@as(u21, instr.immhi) << 2) | @as(u21, instr.immlo);
+    const signed_imm = signExtend(21, @as(u64, imm21));
 
-fn isCompareAndBranch(opcode: u32) bool {
-    return (opcode & 0x7E00_0000) == 0x3400_0000;
-}
-
-fn isTestBitAndBranch(opcode: u32) bool {
-    return (opcode & 0x7E00_0000) == 0x3600_0000;
-}
-
-fn planAdrAdrp(address: u64, opcode: u32) HookError!ReplayPlan {
-    const rd: u5 = @truncate(opcode);
-    const immlo: u64 = (opcode >> 29) & 0x3;
-    const immhi: u64 = (opcode >> 5) & 0x7F_FFFF;
-    const imm21 = (immhi << 2) | immlo;
-    const signed_imm = signExtend(21, imm21);
-
-    if ((opcode & 0x8000_0000) != 0) {
+    if (instr.op == 1) {
         const page_base = try addSignedOffset(address & ~@as(u64, 0xFFF), signed_imm << 12);
-        return .{ .adrp = .{ .rd = rd, .page_base = page_base } };
+        return .{ .adrp = .{ .rd = instr.rd, .page_base = page_base } };
     }
 
     const absolute = try addSignedOffset(address, signed_imm);
-    return .{ .adr = .{ .rd = rd, .absolute = absolute } };
+    return .{ .adr = .{ .rd = instr.rd, .absolute = absolute } };
 }
 
-fn planLiteralLoad(address: u64, opcode: u32) HookError!ReplayPlan {
-    const is_vector = ((opcode >> 26) & 0x1) != 0;
-    const imm19: u64 = (opcode >> 5) & 0x7F_FFFF;
-    const literal_address = try addSignedOffset(address, signExtend(19, imm19) << 2);
-    const rt: u5 = @truncate(opcode);
-    const opc: u2 = @truncate(opcode >> 30);
+/// Decodes the AArch64 literal-load instruction family.
+///
+/// The interesting parts of this encoding are:
+/// - `imm19`, which is sign-extended and scaled by 4
+/// - `v`, which selects scalar GP loads vs FP/SIMD loads
+/// - `opc`, which refines the width / operation inside that family
+fn planLiteralLoad(address: u64, instr: LiteralLoadInstruction) HookError!ReplayPlan {
+    const literal_address = try addSignedOffset(address, signExtend(19, @as(u64, instr.imm19)) << 2);
 
-    if (is_vector) {
-        return switch (opc) {
-            0 => .{ .ldr_literal_s = .{ .rt = rt, .literal_address = literal_address } },
-            1 => .{ .ldr_literal_d = .{ .rt = rt, .literal_address = literal_address } },
-            2 => .{ .ldr_literal_q = .{ .rt = rt, .literal_address = literal_address } },
+    if (instr.v == 1) {
+        return switch (instr.opc) {
+            0 => .{ .ldr_literal_s = .{ .rt = instr.rt, .literal_address = literal_address } },
+            1 => .{ .ldr_literal_d = .{ .rt = instr.rt, .literal_address = literal_address } },
+            2 => .{ .ldr_literal_q = .{ .rt = instr.rt, .literal_address = literal_address } },
             3 => error.ReplayUnsupported,
         };
     }
 
-    return switch (opc) {
-        0 => .{ .ldr_literal_w = .{ .rt = rt, .literal_address = literal_address } },
-        1 => .{ .ldr_literal_x = .{ .rt = rt, .literal_address = literal_address } },
-        2 => .{ .ldrsw_literal = .{ .rt = rt, .literal_address = literal_address } },
+    return switch (instr.opc) {
+        0 => .{ .ldr_literal_w = .{ .rt = instr.rt, .literal_address = literal_address } },
+        1 => .{ .ldr_literal_x = .{ .rt = instr.rt, .literal_address = literal_address } },
+        2 => .{ .ldrsw_literal = .{ .rt = instr.rt, .literal_address = literal_address } },
         3 => .{ .prfm_literal = .{ .literal_address = literal_address } },
     };
 }
 
-fn planImmediateBranch(address: u64, opcode: u32) HookError!ReplayPlan {
-    const imm26: u64 = opcode & 0x03FF_FFFF;
-    const target = try addSignedOffset(address, signExtend(26, imm26) << 2);
+/// Decodes `B` / `BL`.
+///
+/// The 26-bit immediate is sign-extended and scaled by 4. The single `op` bit
+/// chooses whether link register `x30` should be updated (`BL`) or not (`B`).
+fn planImmediateBranch(
+    address: u64,
+    instr: UnconditionalImmediateBranchInstruction,
+) HookError!ReplayPlan {
+    const target = try addSignedOffset(address, signExtend(26, @as(u64, instr.imm26)) << 2);
 
-    if ((opcode & 0x8000_0000) != 0) {
+    if (instr.op == 1) {
         return .{ .branch_with_link = .{ .target = target } };
     }
     return .{ .branch = .{ .target = target } };
 }
 
-fn planConditionalBranch(address: u64, opcode: u32) HookError!ReplayPlan {
-    const imm19: u64 = (opcode >> 5) & 0x7F_FFFF;
-    const target = try addSignedOffset(address, signExtend(19, imm19) << 2);
-    const cond: u4 = @truncate(opcode);
+/// Decodes `B.<cond>`.
+///
+/// The condition code is kept in a dedicated field instead of being extracted
+/// from a mask so readers can see exactly where the low nibble lives inside
+/// the instruction word.
+fn planConditionalBranch(
+    address: u64,
+    instr: ConditionalImmediateBranchInstruction,
+) HookError!ReplayPlan {
+    const target = try addSignedOffset(address, signExtend(19, @as(u64, instr.imm19)) << 2);
 
-    if (cond == 0xF) return error.ReplayUnsupported;
+    if (instr.cond == 0xF) return error.ReplayUnsupported;
 
-    return .{ .conditional_branch = .{ .cond = cond, .target = target } };
+    return .{ .conditional_branch = .{ .cond = instr.cond, .target = target } };
 }
 
-fn planCompareAndBranch(address: u64, opcode: u32) HookError!ReplayPlan {
-    const imm19: u64 = (opcode >> 5) & 0x7F_FFFF;
-    const target = try addSignedOffset(address, signExtend(19, imm19) << 2);
-    const rt: u5 = @truncate(opcode);
-    const branch_on_zero = ((opcode >> 24) & 0x1) == 0;
-    const is_64bit = ((opcode >> 31) & 0x1) != 0;
-
+/// Decodes `CBZ` / `CBNZ`.
+///
+/// `sf` and `op` are intentionally preserved as named fields because together
+/// they explain most of the instruction:
+/// - `sf = 0` -> 32-bit register view
+/// - `sf = 1` -> 64-bit register view
+/// - `op = 0` -> branch if zero
+/// - `op = 1` -> branch if nonzero
+fn planCompareAndBranch(address: u64, instr: CompareAndBranchInstruction) HookError!ReplayPlan {
+    const target = try addSignedOffset(address, signExtend(19, @as(u64, instr.imm19)) << 2);
     return .{
         .compare_and_branch = .{
-            .rt = rt,
+            .rt = instr.rt,
             .target = target,
-            .branch_on_zero = branch_on_zero,
-            .is_64bit = is_64bit,
+            .branch_on_zero = instr.op == 0,
+            .is_64bit = instr.sf == 1,
         },
     };
 }
 
-fn planTestBitAndBranch(address: u64, opcode: u32) HookError!ReplayPlan {
-    const imm14: u64 = (opcode >> 5) & 0x3FFF;
-    const target = try addSignedOffset(address, signExtend(14, imm14) << 2);
-    const rt: u5 = @truncate(opcode);
-    const branch_on_zero = ((opcode >> 24) & 0x1) == 0;
-    const bit_low5: u6 = @truncate((opcode >> 19) & 0x1F);
-    const bit_high1: u6 = @truncate((opcode >> 31) & 0x1);
-    const bit_index = (bit_high1 << 5) | bit_low5;
-
+/// Decodes `TBZ` / `TBNZ`.
+///
+/// The tested bit index is not contiguous in the instruction word. Keeping the
+/// split representation (`b5` + `b40`) visible in the type makes the rebuild
+/// rule obvious:
+/// - `bit_index = (b5 << 5) | b40`
+fn planTestBitAndBranch(
+    address: u64,
+    instr: TestBitAndBranchInstruction,
+) HookError!ReplayPlan {
+    const target = try addSignedOffset(address, signExtend(14, @as(u64, instr.imm14)) << 2);
+    const bit_index: u6 = (@as(u6, instr.b5) << 5) | @as(u6, instr.b40);
     return .{
         .test_bit_and_branch = .{
-            .rt = rt,
+            .rt = instr.rt,
             .bit_index = bit_index,
             .target = target,
-            .branch_on_zero = branch_on_zero,
+            .branch_on_zero = instr.op == 0,
         },
     };
 }
@@ -609,6 +776,64 @@ test "replay planner recognizes common PC-relative families" {
         },
         try planReplay(0x28, 0x3618_0046),
     );
+}
+
+test "packed instruction views match representative AArch64 encodings" {
+    const adr: AdrAdrpInstruction = @bitCast(@as(u32, 0x1000_0020));
+    try std.testing.expectEqual(@as(u5, 0), adr.rd);
+    try std.testing.expectEqual(@as(u19, 1), adr.immhi);
+    try std.testing.expectEqual(adr_adrp_fixed_op, adr.fixed_op);
+    try std.testing.expectEqual(@as(u2, 0), adr.immlo);
+    try std.testing.expectEqual(@as(u1, 0), adr.op);
+
+    const adrp: AdrAdrpInstruction = @bitCast(@as(u32, 0x9000_0000));
+    try std.testing.expectEqual(@as(u5, 0), adrp.rd);
+    try std.testing.expectEqual(@as(u19, 0), adrp.immhi);
+    try std.testing.expectEqual(adr_adrp_fixed_op, adrp.fixed_op);
+    try std.testing.expectEqual(@as(u2, 0), adrp.immlo);
+    try std.testing.expectEqual(@as(u1, 1), adrp.op);
+
+    const ldr_literal_x: LiteralLoadInstruction = @bitCast(@as(u32, 0x5800_0181));
+    try std.testing.expectEqual(@as(u5, 1), ldr_literal_x.rt);
+    try std.testing.expectEqual(@as(u19, 12), ldr_literal_x.imm19);
+    try std.testing.expectEqual(literal_load_fixed_low, ldr_literal_x.fixed_low);
+    try std.testing.expectEqual(@as(u1, 0), ldr_literal_x.v);
+    try std.testing.expectEqual(literal_load_fixed_high, ldr_literal_x.fixed_high);
+    try std.testing.expectEqual(@as(u2, 1), ldr_literal_x.opc);
+
+    const ldr_literal_q: LiteralLoadInstruction = @bitCast(@as(u32, 0x9C00_0040));
+    try std.testing.expectEqual(@as(u5, 0), ldr_literal_q.rt);
+    try std.testing.expectEqual(@as(u19, 2), ldr_literal_q.imm19);
+    try std.testing.expectEqual(literal_load_fixed_low, ldr_literal_q.fixed_low);
+    try std.testing.expectEqual(@as(u1, 1), ldr_literal_q.v);
+    try std.testing.expectEqual(literal_load_fixed_high, ldr_literal_q.fixed_high);
+    try std.testing.expectEqual(@as(u2, 2), ldr_literal_q.opc);
+
+    const bl: UnconditionalImmediateBranchInstruction = @bitCast(@as(u32, 0x9400_0006));
+    try std.testing.expectEqual(@as(u26, 6), bl.imm26);
+    try std.testing.expectEqual(unconditional_immediate_branch_fixed_op, bl.fixed_op);
+    try std.testing.expectEqual(@as(u1, 1), bl.op);
+
+    const b_cond: ConditionalImmediateBranchInstruction = @bitCast(@as(u32, 0x5400_00A0));
+    try std.testing.expectEqual(@as(u4, 0), b_cond.cond);
+    try std.testing.expectEqual(conditional_immediate_branch_fixed_zero, b_cond.fixed_zero);
+    try std.testing.expectEqual(@as(u19, 5), b_cond.imm19);
+    try std.testing.expectEqual(conditional_immediate_branch_fixed_op, b_cond.fixed_op);
+
+    const cbz: CompareAndBranchInstruction = @bitCast(@as(u32, 0xB400_0084));
+    try std.testing.expectEqual(@as(u5, 4), cbz.rt);
+    try std.testing.expectEqual(@as(u19, 4), cbz.imm19);
+    try std.testing.expectEqual(@as(u1, 0), cbz.op);
+    try std.testing.expectEqual(compare_and_branch_fixed_op, cbz.fixed_op);
+    try std.testing.expectEqual(@as(u1, 1), cbz.sf);
+
+    const tbz: TestBitAndBranchInstruction = @bitCast(@as(u32, 0x3618_0046));
+    try std.testing.expectEqual(@as(u5, 6), tbz.rt);
+    try std.testing.expectEqual(@as(u14, 2), tbz.imm14);
+    try std.testing.expectEqual(@as(u5, 3), tbz.b40);
+    try std.testing.expectEqual(@as(u1, 0), tbz.op);
+    try std.testing.expectEqual(test_bit_and_branch_fixed_op, tbz.fixed_op);
+    try std.testing.expectEqual(@as(u1, 0), tbz.b5);
 }
 
 test "condition evaluator matches common NZCV predicates" {
