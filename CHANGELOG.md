@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.0
+
+Released: 2026-03-20
+
+Highlights:
+
+- Added the initial public x86_64 hook backend for macOS and Linux, including entry hooks, trap-based instruction hooks, and execute-original replay through out-of-line trampolines.
+- Added Zydis-backed x86_64 instruction decoding and relocation metadata handling for replayable direct calls, indirect calls, direct jumps, indirect jumps, conditional branches, and RIP-relative memory operands.
+- Added x86_64 callback-visible FP register access, including indexed and named `xmm0..xmm15` views plus `mxcsr`.
+- Added Linux x86_64 runtime smoke coverage in CI and expanded integration coverage for execute-original replay, including direct-call and stack-pointer indirect-call paths.
+- Moved the Zydis bridge into the standalone `hookforge/zydis-zig` Zig package and removed the vendored third-party C payload from `zighook` history.
+
 ## v0.2.0
 
 Released: 2026-03-19
