@@ -4,14 +4,10 @@ fn addX86DecoderIfNeeded(
     module: *std.Build.Module,
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
 ) void {
     if (target.result.cpu.arch != .x86_64) return;
 
-    const zydis_dep = b.dependency("zydis_zig", .{
-        .target = target,
-        .optimize = optimize,
-    });
+    const zydis_dep = b.dependency("zydis_zig", .{});
     module.addCSourceFile(.{
         .file = zydis_dep.path("c/x86_64/decoder_zydis.c"),
         .flags = &.{"-std=c99"},
@@ -28,7 +24,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    addX86DecoderIfNeeded(zighook_mod, b, target, optimize);
+    addX86DecoderIfNeeded(zighook_mod, b, target);
 
     const lib = b.addLibrary(.{
         .name = "zighook",
