@@ -5,6 +5,7 @@
 //! - process-wide signal handlers
 //! - no attempt at thread isolation yet
 //! - callback dispatch by exact trapped address
+//! - no allocation or instruction decoding in the signal hot path
 //!
 //! This mirrors the original Rust crate's "single-thread experimental runtime"
 //! trade-off and keeps the rewrite small enough to reason about.
@@ -16,6 +17,8 @@ const arch = @import("arch/root.zig");
 const state = @import("state.zig");
 
 var handlers_installed = false;
+// zighook installs one process-global SIGTRAP/SIGILL pair and then chains to
+// any previous handlers when a trap is not ours.
 var prev_sigtrap_action: ?std.c.Sigaction = null;
 var prev_sigill_action: ?std.c.Sigaction = null;
 
@@ -88,6 +91,8 @@ fn handleTrap(address: u64, ctx: *arch.HookContext) bool {
     const slot = state.slotByAddress(address) orelse return false;
     const callback = slot.callback orelse return false;
 
+    // The callback can always take full control by editing `ctx.pc` itself.
+    // That is the only branch that bypasses the slot's default resume policy.
     const original_pc = ctx.pc;
     callback(address, ctx);
 
@@ -101,8 +106,13 @@ fn handleTrap(address: u64, ctx: *arch.HookContext) bool {
     const next_pc = address + slot.step_len;
     if (slot.execute_original) {
         if (slot.replay_plan.requiresTrampoline()) {
+            // A trampoline plan means install-time analysis proved the
+            // displaced instruction can be replayed out of line. The callback
+            // path only needs to redirect `pc`.
             ctx.pc = slot.trampoline_pc;
         } else {
+            // Semantic replay plans are mainly used by AArch64 PC-relative
+            // instructions whose meaning depends on the architectural `pc`.
             arch.applyReplay(slot.replay_plan, address, ctx) catch return false;
         }
     } else {
@@ -130,6 +140,9 @@ fn trapHandler(signum: c_int, info: *const std.c.siginfo_t, uctx_opaque: ?*anyop
     };
     arch.normalizeTrapContext(&ctx, trap_address);
 
+    // Do not assume every SIGTRAP/SIGILL in the process belongs to zighook.
+    // Re-reading the instruction keeps chaining behavior correct when other
+    // code also uses traps or breakpoints in the same process.
     if (!(arch.isTrapInstruction(trap_address) catch false)) {
         chainPrevious(signum, info, uctx_opaque);
         return;
@@ -160,6 +173,8 @@ fn installSignal(signum: c_int) HookError!void {
         return error.SignalHandlerInstallFailed;
     }
 
+    // The previous action is preserved so zighook can behave like a normal
+    // signal-chain participant instead of monopolizing SIGTRAP/SIGILL.
     savePreviousAction(signum, previous);
 }
 

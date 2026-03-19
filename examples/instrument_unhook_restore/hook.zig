@@ -20,7 +20,11 @@ fn rtldDefault() ?*anyopaque {
 var patchpoint_addr: u64 = 0;
 
 fn onHit(_: u64, ctx: *zighook.HookContext) callconv(.c) void {
-    ctx.regs.named.x0 = 123;
+    switch (builtin.cpu.arch) {
+        .aarch64 => ctx.regs.named.x0 = 123,
+        .x86_64 => ctx.regs.named.rax = 123,
+        else => @compileError("example payload only supports AArch64 and x86_64"),
+    }
 }
 
 fn install() callconv(.c) void {

@@ -2,3 +2,4 @@
 
 pub const int3_opcode: u8 = 0xCC;
 pub const int3_bytes = [_]u8{int3_opcode};
+pub const nop_opcode: u8 = 0x90;

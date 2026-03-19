@@ -6,6 +6,7 @@
 
 const HookError = @import("../error.zig").HookError;
 const memory = @import("../memory.zig");
+const SavedInstruction = @import("../saved_instruction.zig").SavedInstruction;
 const arch_constants = @import("aarch64/constants.zig");
 const arch_context = @import("aarch64/context/root.zig");
 const arch_instruction = @import("aarch64/instruction.zig");
@@ -34,12 +35,22 @@ pub const applyReplay = arch_instruction.applyReplay;
 pub const createOriginalTrampoline = arch_trampoline.createOriginalTrampoline;
 pub const freeOriginalTrampoline = arch_trampoline.freeOriginalTrampoline;
 
+pub fn planReplayInstruction(address: u64, instruction: SavedInstruction) HookError!ReplayPlan {
+    const opcode = instruction.exactU32() orelse return error.UnsupportedOperation;
+    return arch_instruction.planReplay(address, opcode);
+}
+
 pub fn supportsPatchCode() bool {
     return true;
 }
 
 pub fn trapPatchBytes() []const u8 {
     return arch_constants.brk_bytes[0..];
+}
+
+pub fn makeTrapPatch(step_len: u8) HookError!SavedInstruction {
+    if (step_len != 4) return error.InvalidAddress;
+    return SavedInstruction.fromSlice(arch_constants.brk_bytes[0..]);
 }
 
 pub fn validateAddress(address: u64) HookError!void {

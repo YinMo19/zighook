@@ -1,4 +1,6 @@
-# AArch64 platform workflows
+# Platform workflows
+
+This document focuses on deployment and packaging flows.
 
 This repository now implements AArch64 backends for:
 

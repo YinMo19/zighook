@@ -34,6 +34,18 @@ zig build-lib -dynamic -OReleaseFast -femit-bin=hook.dylib \
   -lc
 ```
 
+Linux x86_64 uses the Zydis shim C source as well:
+
+```bash
+zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
+  ../../c_deps/x86_64/decoder_zydis.c \
+  -I ../../c_deps/zydis \
+  --dep zighook \
+  -Mroot=hook.zig \
+  -Mzighook=../../src/root.zig \
+  -lc
+```
+
 ## Run
 
 ```bash

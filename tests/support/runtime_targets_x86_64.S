@@ -7,6 +7,14 @@
 .text
 .p2align 4
 
+// Demo add target used by instruction-level replay tests.
+.globl SYM(demo_add_target)
+.globl SYM(demo_add_patchpoint)
+SYM(demo_add_target):
+SYM(demo_add_patchpoint):
+    leal (%rdi,%rsi), %eax
+    ret
+
 // Simple prepatched entry-hook target for x86_64 tests. The first byte is
 // already `int3`, so `prepatched.inline_hook(...)` only needs to register
 // runtime dispatch state.

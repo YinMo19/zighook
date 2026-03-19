@@ -10,6 +10,8 @@ program calls the target function once while hooked, resolves that helper with
 
 ## Build
 
+macOS / AArch64:
+
 ```bash
 cc -arch arm64 -O3 -DNDEBUG -Wl,-export_dynamic -o target target.c
 ```
@@ -22,10 +24,32 @@ zig build-lib -dynamic -OReleaseFast -femit-bin=hook.dylib \
   -lc
 ```
 
+Linux x86_64:
+
+```bash
+cc -O3 -DNDEBUG -rdynamic -o target target.c -ldl
+```
+
+```bash
+zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
+  ../../c_deps/x86_64/decoder_zydis.c \
+  -I ../../c_deps/zydis \
+  --dep zighook \
+  -Mroot=hook.zig \
+  -Mzighook=../../src/root.zig \
+  -lc
+```
+
 ## Run
 
 ```bash
 DYLD_INSERT_LIBRARIES=$PWD/hook.dylib ./target
+```
+
+Linux x86_64:
+
+```bash
+LD_PRELOAD=$PWD/hook.so ./target
 ```
 
 ## Expected Output

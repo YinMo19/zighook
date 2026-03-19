@@ -1,5 +1,15 @@
 const std = @import("std");
 
+fn addX86DecoderIfNeeded(module: *std.Build.Module, b: *std.Build, target: std.Build.ResolvedTarget) void {
+    if (target.result.cpu.arch != .x86_64) return;
+
+    module.addIncludePath(b.path("c_deps/zydis"));
+    module.addCSourceFile(.{
+        .file = b.path("c_deps/x86_64/decoder_zydis.c"),
+        .flags = &.{"-std=c99"},
+    });
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -10,6 +20,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    addX86DecoderIfNeeded(zighook_mod, b, target);
 
     const lib = b.addLibrary(.{
         .name = "zighook",

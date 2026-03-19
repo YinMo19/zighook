@@ -5,7 +5,7 @@ These examples mirror the intent of the Rust `sighook` demos.
 Current coverage:
 
 - **AArch64 / ARM64:** macOS / iOS / Linux / Android
-- **x86_64:** macOS / Linux first slice (`inline_hook_signal` and `prepatched_inline_hook`)
+- **x86_64:** macOS / Linux with entry hooks and instruction-level replay
 
 Each example directory is intentionally a standalone mini-project with exactly:
 
@@ -38,7 +38,20 @@ DYLD_INSERT_LIBRARIES=$PWD/hook.dylib ./target
 ```
 
 That exact command sequence is still the canonical **macOS runtime smoke** for
-AArch64. On Linux, CI runs both AArch64 and x86_64 runtime smokes. For Linux /
+AArch64. On Linux, CI runs both AArch64 and x86_64 runtime smokes. Direct
+`x86_64` CLI builds also add the vendored Zydis shim:
+
+```bash
+zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
+  ../../c_deps/x86_64/decoder_zydis.c \
+  -I ../../c_deps/zydis \
+  --dep zighook \
+  -Mroot=hook.zig \
+  -Mzighook=../../src/root.zig \
+  -lc
+```
+
+For Linux /
 iOS / Android deployment workflows, see:
 
 - `../docs/platform-workflows.md`
@@ -46,9 +59,9 @@ iOS / Android deployment workflows, see:
 Available examples:
 
 - `inline_hook_signal`: function-entry trap hook, expected output `result=42`
-- `instrument_with_original`: trap one instruction, edit registers, replay it, expected output `result=42` (AArch64 today)
-- `instrument_no_original`: trap one instruction and replace it, expected output `result=99` (AArch64 today)
-- `instrument_unhook_restore`: install a trap hook, call `unhook`, and confirm restoration, expected output `hooked=123` then `restored=5` (AArch64 today)
+- `instrument_with_original`: trap one instruction, edit registers, replay it, expected output `result=42`
+- `instrument_no_original`: trap one instruction and replace it, expected output `result=99`
+- `instrument_unhook_restore`: install a trap hook, call `unhook`, and confirm restoration, expected output `hooked=123` then `restored=5`
 - `prepatched_inline_hook`: use `prepatched.inline_hook(...)` on a binary that already contains `brk`, expected output `result=77`
 
 Each example README contains the exact commands and expected output. CI executes

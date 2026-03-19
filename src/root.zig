@@ -97,7 +97,7 @@ pub const OriginalInstruction = SavedInstruction;
 const InstallMode = enum {
     /// zighook patches the executable page at registration time.
     runtime_patch,
-    /// the caller already arranged for `brk` to be present in the binary.
+    /// the caller already arranged for a trap to be present in the binary.
     prepatched,
 };
 
@@ -108,9 +108,11 @@ const InstallMode = enum {
 /// you want to inspect or edit machine state immediately before that happens.
 ///
 /// Installation contract:
-/// - `address` must point to a 4-byte aligned AArch64 instruction
-/// - zighook replaces that instruction with `brk #0`
-/// - the original opcode is returned to the caller and cached internally
+/// - `address` must point to an instruction the active backend can trap safely
+/// - AArch64 replaces the full 4-byte instruction with `brk #0`
+/// - x86_64 replaces the first byte with `int3` and pads the remaining bytes
+///   of the displaced instruction with `nop`
+/// - the original instruction bytes are cached internally
 /// - signal handlers are installed lazily on the first successful hook
 ///
 /// Resume behavior:
@@ -122,18 +124,31 @@ const InstallMode = enum {
 /// patching code unless zighook can prove a safe replay strategy for the
 /// trapped opcode.
 ///
-/// This function returns the original 32-bit instruction word.
+/// For fixed-width ISAs, this function returns the original 32-bit opcode
+/// value. On variable-length ISAs, the return value is only the low 32-bit
+/// prefix of the displaced instruction. Call `original_instruction(...)` if you
+/// need the exact saved byte sequence.
 ///
 /// Example:
 /// ```zig
 /// const zighook = @import("zighook");
+/// const builtin = @import("builtin");
 /// const c = @cImport({
 ///     @cInclude("dlfcn.h");
 /// });
 ///
 /// fn onAdd(_: u64, ctx: *zighook.HookContext) callconv(.c) void {
-///     ctx.regs.named.x0 = 40;
-///     ctx.regs.named.x1 = 2;
+///     switch (builtin.cpu.arch) {
+///         .aarch64 => {
+///             ctx.regs.named.x0 = 40;
+///             ctx.regs.named.x1 = 2;
+///         },
+///         .x86_64 => {
+///             ctx.regs.named.rdi = 40;
+///             ctx.regs.named.rsi = 2;
+///         },
+///         else => unreachable,
+///     }
 /// }
 ///
 /// fn install() void {
@@ -158,18 +173,25 @@ pub fn instrument(address: u64, callback: InstrumentCallback) HookError!u32 {
 /// - otherwise zighook advances to the next instruction without replaying the
 ///   displaced opcode
 ///
-/// This function still returns the original 32-bit instruction word, which can
-/// be useful for logging or for later offline patch preparation.
+/// This function still returns a compatibility `u32` value. Fixed-width ISAs
+/// return the real opcode word; variable-length ISAs return the low 32-bit
+/// prefix of the displaced instruction. Use `original_instruction(...)` for the
+/// exact byte sequence.
 ///
 /// Example:
 /// ```zig
 /// const zighook = @import("zighook");
+/// const builtin = @import("builtin");
 /// const c = @cImport({
 ///     @cInclude("dlfcn.h");
 /// });
 ///
 /// fn onHit(_: u64, ctx: *zighook.HookContext) callconv(.c) void {
-///     ctx.regs.named.x0 = 99;
+///     switch (builtin.cpu.arch) {
+///         .aarch64 => ctx.regs.named.x0 = 99,
+///         .x86_64 => ctx.regs.named.rax = 99,
+///         else => unreachable,
+///     }
 /// }
 ///
 /// fn install() void {
@@ -183,7 +205,7 @@ pub fn instrument_no_original(address: u64, callback: InstrumentCallback) HookEr
     return instrumentInternal(address, callback, false, false, .runtime_patch);
 }
 
-/// Hooks a function entry by replacing its first instruction with `brk #0`.
+/// Hooks a function entry by replacing its first instruction with a trap.
 ///
 /// This is the "return directly from the callback" API. It is typically used
 /// at function entry points where the callback wants to produce a synthetic
@@ -191,25 +213,31 @@ pub fn instrument_no_original(address: u64, callback: InstrumentCallback) HookEr
 ///
 /// Resume behavior:
 /// - if `callback` overwrites `ctx.pc`, that explicit control-flow choice wins
-/// - otherwise zighook returns to `lr`, as if the function had completed
+/// - otherwise zighook returns to the caller using the active ISA ABI
 ///
 /// Typical usage:
-/// - write the desired return value into `ctx.regs.named.x0`
+/// - write the desired return value into the ABI return register
 /// - optionally adjust other registers for side effects
 /// - leave `ctx.pc` untouched so zighook returns to the caller automatically
 ///
-/// This function returns the original 32-bit instruction word that was replaced
-/// by the trap.
+/// This function returns the same compatibility `u32` prefix described by
+/// `instrument(...)`. Use `original_instruction(...)` when the exact saved
+/// bytes matter.
 ///
 /// Example:
 /// ```zig
 /// const zighook = @import("zighook");
+/// const builtin = @import("builtin");
 /// const c = @cImport({
 ///     @cInclude("dlfcn.h");
 /// });
 ///
 /// fn onEnter(_: u64, ctx: *zighook.HookContext) callconv(.c) void {
-///     ctx.regs.named.x0 = 42;
+///     switch (builtin.cpu.arch) {
+///         .aarch64 => ctx.regs.named.x0 = 42,
+///         .x86_64 => ctx.regs.named.rax = 42,
+///         else => unreachable,
+///     }
 /// }
 ///
 /// fn install() void {
@@ -228,7 +256,7 @@ pub fn inline_hook(address: u64, callback: InstrumentCallback) HookError!u32 {
 /// Behavior depends on how the address was installed:
 /// - runtime patch APIs restore the original code bytes
 /// - `prepatched.*` APIs remove dispatch state only and leave the existing
-///   `brk` instruction in place
+///   trap instruction in place
 ///
 /// This call is not idempotent. If no hook exists for `address`, it returns
 /// `error.HookNotFound`.
@@ -327,7 +355,7 @@ pub const cacheOriginalInstruction = cache_original_instruction;
 ///
 /// This namespace is intended for offline patching workflows:
 /// - the binary was edited ahead of time
-/// - or another build step already emitted `brk` at known patch points
+/// - or another build step already emitted a trap at known patch points
 /// - zighook only needs to register runtime dispatch state
 ///
 /// `prepatched.inline_hook(...)` does not require extra metadata because it
@@ -408,12 +436,20 @@ fn instrumentInternal(
     return_to_caller: bool,
     install_mode: InstallMode,
 ) HookError!u32 {
-    const replay_plan = if (execute_original)
-        try planExecuteOriginalReplay(address)
-    else
-        arch.ReplayPlan{ .skip = {} };
-
     if (state.slotByAddress(address)) |slot| {
+        if (execute_original and install_mode == .prepatched and state.cachedOriginalInstruction(address) == null) {
+            return error.UnsupportedOperation;
+        }
+
+        const replay_plan = if (execute_original)
+            try planExecuteOriginalReplay(
+                address,
+                state.cachedOriginalInstruction(address) orelse
+                    (SavedInstruction.fromSlice(slot.original_bytes[0..slot.original_len]) catch return error.InvalidAddress),
+            )
+        else
+            arch.ReplayPlan{ .skip = {} };
+
         // Re-registering the same address updates callback policy in-place.
         try state.registerHook(
             address,
@@ -433,26 +469,41 @@ fn instrumentInternal(
     try arch.validateAddress(address);
 
     var cached_instruction = state.cachedOriginalInstruction(address);
-    const step_len = try resolveStepLen(address, return_to_caller, cached_instruction);
     var restore_instruction: SavedInstruction = undefined;
+    var step_len: u8 = 0;
     var runtime_patch_installed = false;
 
     switch (install_mode) {
         .runtime_patch => {
-            restore_instruction = try readInstructionBytes(address, arch.trapPatchBytes().len);
-            try memory.patchBytes(address, arch.trapPatchBytes());
+            step_len = try arch.instructionWidth(address);
+            restore_instruction = try readInstructionBytes(address, step_len);
             if (cached_instruction == null) {
                 cached_instruction = restore_instruction;
             }
-            runtime_patch_installed = true;
         },
         .prepatched => {
             try ensurePrepatchedTrap(address);
+            step_len = try resolveStepLen(address, return_to_caller, cached_instruction, install_mode);
             restore_instruction = try readInstructionBytes(address, arch.trapPatchBytes().len);
             if (cached_instruction == null) {
                 cached_instruction = restore_instruction;
             }
         },
+    }
+
+    if (execute_original and install_mode == .prepatched and state.cachedOriginalInstruction(address) == null) {
+        return error.UnsupportedOperation;
+    }
+
+    const replay_plan = if (execute_original)
+        try planExecuteOriginalReplay(address, cached_instruction orelse return error.UnsupportedOperation)
+    else
+        arch.ReplayPlan{ .skip = {} };
+
+    if (install_mode == .runtime_patch) {
+        const trap_patch = try arch.makeTrapPatch(step_len);
+        try memory.patchBytes(address, trap_patch.slice());
+        runtime_patch_installed = true;
     }
 
     state.registerHook(
@@ -481,26 +532,27 @@ fn instrumentInternal(
 ///
 /// The decision is made before runtime state is registered so unsupported
 /// execute-original cases fail early, before any executable page is modified.
-fn planExecuteOriginalReplay(address: u64) HookError!arch.ReplayPlan {
-    if (!arch.supportsPatchCode()) return error.ReplayUnsupported;
-
-    const opcode = if (state.cachedOriginalInstruction(address)) |instruction|
-        instruction.exactU32() orelse return error.UnsupportedOperation
-    else
-        try memory.readU32(address);
-
-    return arch.planReplay(address, opcode);
+fn planExecuteOriginalReplay(address: u64, instruction: SavedInstruction) HookError!arch.ReplayPlan {
+    return arch.planReplayInstruction(address, instruction);
 }
 
-fn resolveStepLen(address: u64, return_to_caller: bool, saved_instruction: ?SavedInstruction) HookError!u8 {
-    switch (builtin.cpu.arch) {
-        .aarch64 => return arch.instructionWidth(address),
-        .x86_64 => {
-            if (return_to_caller) return 1;
-            const instruction = saved_instruction orelse return error.UnsupportedOperation;
-            return instruction.len;
+fn resolveStepLen(
+    address: u64,
+    return_to_caller: bool,
+    saved_instruction: ?SavedInstruction,
+    install_mode: InstallMode,
+) HookError!u8 {
+    switch (install_mode) {
+        .runtime_patch => return arch.instructionWidth(address),
+        .prepatched => switch (builtin.cpu.arch) {
+            .aarch64 => return if (saved_instruction) |instruction| instruction.len else @intCast(arch.trapPatchBytes().len),
+            .x86_64 => {
+                if (saved_instruction) |instruction| return instruction.len;
+                if (return_to_caller) return @intCast(arch.trapPatchBytes().len);
+                return error.UnsupportedOperation;
+            },
+            else => return error.UnsupportedArchitecture,
         },
-        else => return error.UnsupportedArchitecture,
     }
 }
 

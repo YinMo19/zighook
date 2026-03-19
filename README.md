@@ -9,7 +9,7 @@ Current scope:
 - Linux
 - Android
 - AArch64 / ARM64
-- x86_64 (macOS / Linux first slice)
+- x86_64 (macOS / Linux)
 
 Implemented APIs:
 
@@ -31,6 +31,7 @@ The current backends support:
 - trap-based instrumentation via `brk` (AArch64) or `int3` (x86_64)
 - signal-based entry hooks on AArch64 and x86_64
 - strict execute-original replay for common AArch64 PC-relative instructions
+- Zydis-backed x86_64 instruction decoding plus trampoline replay
 - public callback access to AArch64 FP/SIMD state (`fpregs.v[i]`, `fpregs.named.v0..v31`, `fpsr`, `fpcr`)
 - public callback access to x86_64 XMM state (`fpregs.xmm[i]`, `fpregs.named.xmm0..xmm15`, `mxcsr`)
 - constructor-based payloads for both Mach-O (`__mod_init_func`) and ELF (`.init_array`)
@@ -58,14 +59,20 @@ Verification status:
 - Linux x86_64: runtime-tested in CI
 - macOS x86_64: core library and example payload cross-compiled
 
-x86_64 backend scope in this first slice:
+x86_64 replay coverage:
 
 - `inline_hook(...)`: supported
 - `prepatched.inline_hook(...)`: supported
-- `instrument_no_original(...)`: supported when the caller first provides
-  original instruction bytes with `cache_original_instruction(...)`
-- `instrument(...)`: not implemented yet and currently returns
+- `instrument_no_original(...)`: supported with automatic instruction-length
+  decoding for runtime-installed hooks
+- `instrument(...)`: supported through Zydis-backed decode + trampoline replay
+- unsupported x86_64 execute-original cases still fail early with
   `error.ReplayUnsupported`
+  - stack-pointer-based indirect calls, where synthesizing the original call
+    would change the operand address
+  - interrupt / syscall / system instructions
+  - RIP-relative relocations that cannot be represented from the allocated
+    trampoline address
 
 Deployment model by platform:
 
@@ -134,6 +141,19 @@ zig build-lib -dynamic -OReleaseFast -femit-bin=hook.dylib \
 DYLD_INSERT_LIBRARIES=$PWD/hook.dylib ./target
 ```
 
+When you build a hook payload for `x86_64` directly with `zig build-lib`,
+include the vendored Zydis shim C file as well:
+
+```bash
+zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
+  ../../c_deps/x86_64/decoder_zydis.c \
+  -I ../../c_deps/zydis \
+  --dep zighook \
+  -Mroot=hook.zig \
+  -Mzighook=../../src/root.zig \
+  -lc
+```
+
 For Linux, iOS, and Android deployment flows, see:
 
 - `docs/platform-workflows.md`
@@ -147,8 +167,7 @@ Available examples:
 - `prepatched_inline_hook`: register a trap point that already contains `brk`, expected output `result=77`
 
 CI runs these exact per-directory build commands and compares exact stdout.
-The current x86_64 Linux CI smoke runs the `inline_hook_signal` and
-`prepatched_inline_hook` examples.
+The Linux x86_64 CI smoke now runs all five shipped examples.
 
 See:
 
@@ -162,6 +181,8 @@ The public integration guide lives directly in `src/root.zig`. Each exported
 function is documented with behavior, installation rules, resume semantics, and
 small code examples so callers can integrate the library without reading
 internal backend code.
+
+For deployment-oriented notes, see `docs/platform-workflows.md`.
 
 ## License
 

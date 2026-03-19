@@ -8,6 +8,11 @@
 //!
 //! This is not intended as a forever design, but it keeps the first rewrite
 //! deterministic and close to the original crate's behavior.
+//!
+//! Two stores live here on purpose:
+//! - `hook_slots`: active runtime dispatch state
+//! - `original_instruction_slots`: metadata for prepatched sites, where the
+//!   original instruction no longer exists in process memory
 
 const std = @import("std");
 
@@ -44,6 +49,8 @@ pub const HookSlot = struct {
 };
 
 const OriginalInstructionSlot = struct {
+    // This table exists independently from `HookSlot` so callers can preload
+    // original instruction bytes before registering `prepatched.*` hooks.
     used: bool = false,
     address: u64 = 0,
     instruction: SavedInstruction = .{},
@@ -102,10 +109,16 @@ pub fn registerHook(
         slot.callback = callback;
         slot.execute_original = execute_original;
         slot.return_to_caller = return_to_caller;
+        // Once zighook has installed a runtime patch at an address, that fact
+        // must survive later re-registrations so `unhook(...)` still knows
+        // whether code bytes need to be restored.
         slot.runtime_patch_installed = slot.runtime_patch_installed or runtime_patch_installed;
         slot.replay_plan = replay_plan;
 
         if (slot.original_len == 0) {
+            // The first registration owns the restore bytes and step length.
+            // Later registrations only change policy, not the displaced
+            // instruction identity.
             slot.original_len = @intCast(original_bytes.len);
             slot.original_bytes = stored_bytes;
             slot.step_len = step_len;
@@ -126,6 +139,8 @@ pub fn registerHook(
     }
 
     const free_index = findFreeHookIndex() orelse return error.HookSlotsFull;
+    // Allocate the trampoline before publishing the slot so a failure never
+    // leaves behind partially registered runtime state.
     const trampoline_pc = if (execute_original and replay_plan.requiresTrampoline())
         try arch.createOriginalTrampoline(address, original_bytes, step_len)
     else
