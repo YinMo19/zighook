@@ -15,6 +15,24 @@ SYM(demo_add_patchpoint):
     leal (%rdi,%rsi), %eax
     ret
 
+// Replay test for stack-pointer-based indirect calls. The patchpoint is the
+// indirect call through the top-of-stack function pointer slot.
+.globl SYM(demo_stack_call_target)
+.globl SYM(demo_stack_call_patchpoint)
+SYM(demo_stack_call_target):
+    subq $24, %rsp
+    leaq SYM(demo_stack_call_impl)(%rip), %rax
+    movq %rax, (%rsp)
+SYM(demo_stack_call_patchpoint):
+    call *(%rsp)
+    addq $24, %rsp
+    ret
+
+.globl SYM(demo_stack_call_impl)
+SYM(demo_stack_call_impl):
+    leal (%rdi,%rsi), %eax
+    ret
+
 // Simple prepatched entry-hook target for x86_64 tests. The first byte is
 // already `int3`, so `prepatched.inline_hook(...)` only needs to register
 // runtime dispatch state.

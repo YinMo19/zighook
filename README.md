@@ -66,10 +66,10 @@ x86_64 replay coverage:
 - `instrument_no_original(...)`: supported with automatic instruction-length
   decoding for runtime-installed hooks
 - `instrument(...)`: supported through Zydis-backed decode + trampoline replay
+- stack-pointer-based indirect calls such as `call *(%rsp)` are replayed
+  through a synthetic push-plus-jump trampoline sequence
 - unsupported x86_64 execute-original cases still fail early with
   `error.ReplayUnsupported`
-  - stack-pointer-based indirect calls, where synthesizing the original call
-    would change the operand address
   - interrupt / syscall / system instructions
   - RIP-relative relocations that cannot be represented from the allocated
     trampoline address

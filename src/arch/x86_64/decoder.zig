@@ -23,6 +23,10 @@ const CDecodedInstruction = extern struct {
     disp_offset: u8,
     disp_size: u8,
     modrm_offset: u8,
+    mem_base: u8,
+    mem_index: u8,
+    mem_scale: u8,
+    mem_disp: i32,
     absolute_target: u64,
 };
 
@@ -47,6 +51,27 @@ pub const Control = enum(u8) {
 const flag_has_rip_relative_memory: u8 = 1 << 0;
 const flag_has_relative_immediate: u8 = 1 << 1;
 const flag_uses_stack_pointer_memory: u8 = 1 << 2;
+const flag_has_non_default_memory_segment: u8 = 1 << 3;
+
+pub const MemoryRegister = enum(u8) {
+    rax = 0,
+    rcx = 1,
+    rdx = 2,
+    rbx = 3,
+    rsp = 4,
+    rbp = 5,
+    rsi = 6,
+    rdi = 7,
+    r8 = 8,
+    r9 = 9,
+    r10 = 10,
+    r11 = 11,
+    r12 = 12,
+    r13 = 13,
+    r14 = 14,
+    r15 = 15,
+    none = 0xFF,
+};
 
 pub const DecodedInstruction = struct {
     length: u8,
@@ -57,6 +82,10 @@ pub const DecodedInstruction = struct {
     disp_offset: u8,
     disp_size: u8,
     modrm_offset: u8,
+    mem_base: MemoryRegister,
+    mem_index: MemoryRegister,
+    mem_scale: u8,
+    mem_disp: i32,
     // Interpreted according to `flags` / `control`:
     // - direct branch/call target when a relative immediate is present
     // - absolute memory target for RIP-relative operands
@@ -72,6 +101,16 @@ pub const DecodedInstruction = struct {
 
     pub fn usesStackPointerMemory(self: DecodedInstruction) bool {
         return (self.flags & flag_uses_stack_pointer_memory) != 0;
+    }
+
+    pub fn hasNonDefaultMemorySegment(self: DecodedInstruction) bool {
+        return (self.flags & flag_has_non_default_memory_segment) != 0;
+    }
+
+    pub fn canRewriteStackPointerIndirectCall(self: DecodedInstruction) bool {
+        if (self.control != .indirect_call or !self.usesStackPointerMemory()) return false;
+        if (self.hasNonDefaultMemorySegment()) return false;
+        return self.mem_base == .rsp;
     }
 
     pub fn hasFallthrough(self: DecodedInstruction) bool {
@@ -94,6 +133,10 @@ pub fn decodeInstruction(runtime_address: u64, bytes: []const u8) HookError!Deco
         .disp_offset = 0,
         .disp_size = 0,
         .modrm_offset = 0,
+        .mem_base = @intFromEnum(MemoryRegister.none),
+        .mem_index = @intFromEnum(MemoryRegister.none),
+        .mem_scale = 0,
+        .mem_disp = 0,
         .absolute_target = 0,
     };
 
@@ -113,6 +156,10 @@ pub fn decodeInstruction(runtime_address: u64, bytes: []const u8) HookError!Deco
         .disp_offset = decoded.disp_offset,
         .disp_size = decoded.disp_size,
         .modrm_offset = decoded.modrm_offset,
+        .mem_base = @enumFromInt(decoded.mem_base),
+        .mem_index = @enumFromInt(decoded.mem_index),
+        .mem_scale = decoded.mem_scale,
+        .mem_disp = decoded.mem_disp,
         .absolute_target = decoded.absolute_target,
     };
 }
@@ -135,6 +182,12 @@ test "Zydis-backed decoder classifies common replay cases" {
     const call_rsp = try decodeInstruction(0x4000, &.{ 0xFF, 0x54, 0x24, 0x08 });
     try std.testing.expectEqual(Control.indirect_call, call_rsp.control);
     try std.testing.expect(call_rsp.usesStackPointerMemory());
+    try std.testing.expect(call_rsp.canRewriteStackPointerIndirectCall());
+
+    const call_stack_top = try decodeInstruction(0x5000, &.{ 0xFF, 0x14, 0x24 });
+    try std.testing.expectEqual(Control.indirect_call, call_stack_top.control);
+    try std.testing.expect(call_stack_top.usesStackPointerMemory());
+    try std.testing.expect(call_stack_top.canRewriteStackPointerIndirectCall());
 }
 
 const std = @import("std");

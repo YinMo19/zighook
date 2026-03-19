@@ -12,6 +12,11 @@ const decoder = @import("decoder.zig");
 const HookError = @import("../../error.zig").HookError;
 const memory = @import("../../memory.zig");
 
+const RegisterBits = struct {
+    field: u8,
+    rex: bool,
+};
+
 const TrampolineEmitter = struct {
     mapped: []align(std.heap.page_size_min) u8,
     base_pc: u64,
@@ -45,7 +50,66 @@ const TrampolineEmitter = struct {
         try self.emit(opcode[0..]);
         try self.emit(literal[0..]);
     }
+
+    fn emitStackPointerIndirectJump(
+        self: *TrampolineEmitter,
+        decoded: decoder.DecodedInstruction,
+        stack_adjust: i32,
+    ) HookError!void {
+        if (!decoded.canRewriteStackPointerIndirectCall()) return error.ReplayUnsupported;
+
+        const adjusted_disp = @as(i64, decoded.mem_disp) + @as(i64, stack_adjust);
+        const index_bits = try registerBits(decoded.mem_index);
+        const scale_bits: u8 = if (decoded.mem_index == .none) 0 else try sibScaleBits(decoded.mem_scale);
+
+        const rex: u8 = if (index_bits.rex) 0x42 else 0;
+        const mod: u8, const disp_len: u8, const disp: i32 = if (adjusted_disp >= std.math.minInt(i8) and adjusted_disp <= std.math.maxInt(i8))
+            .{ 0b01, 1, @as(i32, @intCast(adjusted_disp)) }
+        else if (adjusted_disp >= std.math.minInt(i32) and adjusted_disp <= std.math.maxInt(i32))
+            .{ 0b10, 4, @as(i32, @intCast(adjusted_disp)) }
+        else
+            return error.ReplayUnsupported;
+
+        if (rex != 0) {
+            try self.emit(&.{rex});
+        }
+
+        const modrm = (mod << 6) | (4 << 3) | 4;
+        const sib = (scale_bits << 6) | (index_bits.field << 3) | 4;
+        try self.emit(&.{ 0xFF, modrm, sib });
+
+        switch (disp_len) {
+            1 => try self.emit(&.{@bitCast(@as(i8, @intCast(disp)))}),
+            4 => {
+                const disp_bytes = std.mem.toBytes(std.mem.nativeToLittle(i32, disp));
+                try self.emit(disp_bytes[0..]);
+            },
+            else => return error.ReplayUnsupported,
+        }
+    }
 };
+
+fn registerBits(reg: decoder.MemoryRegister) HookError!RegisterBits {
+    if (reg == .none) {
+        return .{ .field = 4, .rex = false };
+    }
+
+    const raw: u8 = @intFromEnum(reg);
+    return .{
+        .field = raw & 0x7,
+        .rex = (raw & 0x8) != 0,
+    };
+}
+
+fn sibScaleBits(scale: u8) HookError!u8 {
+    return switch (scale) {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        8 => 3,
+        else => error.ReplayUnsupported,
+    };
+}
 
 fn writeRelativeOffset(bytes: []u8, offset: usize, size: u8, value: i64) HookError!void {
     switch (size) {
@@ -159,13 +223,17 @@ pub fn createOriginalTrampoline(address: u64, original_bytes: []const u8, step_l
             try emitter.emitAbsoluteJump(decoded.absolute_target);
         },
         .indirect_call => {
-            if (decoded.usesStackPointerMemory()) return error.ReplayUnsupported;
-
             try emitter.emitAbsolutePush(next_pc);
-            var bytes = try copyInstruction(original_bytes, step_len);
-            try rewriteIndirectCallToJump(bytes[0..@as(usize, step_len)], decoded);
-            try patchRipRelativeDisplacement(bytes[0..@as(usize, step_len)], decoded, emitter.currentPc());
-            try emitter.emit(bytes[0..@as(usize, step_len)]);
+            if (decoded.usesStackPointerMemory()) {
+                // The synthetic push shifts `rsp` by 8 bytes. Re-encode the
+                // jump so it still reads the same original stack slot.
+                try emitter.emitStackPointerIndirectJump(decoded, 8);
+            } else {
+                var bytes = try copyInstruction(original_bytes, step_len);
+                try rewriteIndirectCallToJump(bytes[0..@as(usize, step_len)], decoded);
+                try patchRipRelativeDisplacement(bytes[0..@as(usize, step_len)], decoded, emitter.currentPc());
+                try emitter.emit(bytes[0..@as(usize, step_len)]);
+            }
         },
         .direct_jump => {
             try emitter.emitAbsoluteJump(decoded.absolute_target);

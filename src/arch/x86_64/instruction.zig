@@ -29,10 +29,12 @@ pub fn planReplay(_: u64, _: u32) HookError!ReplayPlan {
 pub fn planReplayInstruction(address: u64, instruction: SavedInstruction) HookError!ReplayPlan {
     const decoded = try decoder.decodeInstruction(address, instruction.slice());
     if (decoded.control == .unsupported) return error.ReplayUnsupported;
-    if (decoded.control == .indirect_call and decoded.usesStackPointerMemory()) {
-        // `call [rsp + ...]` is deliberately rejected. The trampoline path
-        // needs to synthesize a return address push, which would change the
-        // effective operand address and therefore change program semantics.
+    if (decoded.control == .indirect_call and decoded.usesStackPointerMemory() and
+        !decoded.canRewriteStackPointerIndirectCall())
+    {
+        // Stack-pointer-based indirect calls are only replayable when the
+        // trampoline can synthesize an equivalent `jmp [rsp + adjusted_disp]`
+        // sequence after pushing the original return address.
         return error.ReplayUnsupported;
     }
     return .{ .trampoline = {} };
