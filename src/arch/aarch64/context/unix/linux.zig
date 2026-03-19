@@ -6,7 +6,7 @@
 
 const std = @import("std");
 
-const types = @import("types.zig");
+const types = @import("../types.zig");
 
 const linux = std.os.linux;
 const LinuxMContext = linux.mcontext_t;

@@ -7,7 +7,7 @@
 
 const std = @import("std");
 
-const types = @import("types.zig");
+const types = @import("../types.zig");
 
 /// Darwin thread-state type used by the currently supported backend.
 const DarwinThreadState = @FieldType(std.c.mcontext_t, "ss");

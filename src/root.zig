@@ -4,7 +4,7 @@
 //! trap-driven inline hooks and instruction hooks.
 //!
 //! The caller-facing design is intentionally small and entirely centered around
-//! process-global trap handling on the currently supported Unix backends:
+//! process-global trap handling on the currently supported platform backends:
 //! - `instrument(...)`: trap one instruction and then execute it
 //! - `instrument_no_original(...)`: trap one instruction and replace it
 //! - `inline_hook(...)`: trap a function entry and return directly to the caller
@@ -20,18 +20,18 @@ const std = @import("std");
 comptime {
     const supported = switch (builtin.cpu.arch) {
         .aarch64 => switch (builtin.os.tag) {
-            .macos, .ios, .linux => true,
+            .macos, .ios, .linux, .windows => true,
             else => false,
         },
         .x86_64 => switch (builtin.os.tag) {
-            .macos, .linux => true,
+            .macos, .linux, .windows => true,
             else => false,
         },
         else => false,
     };
 
     if (!supported) {
-        @compileError("zighook currently implements AArch64 backends for macOS, iOS, Linux, and Android, plus x86_64 backends for macOS and Linux.");
+        @compileError("zighook currently implements AArch64 backends for macOS, iOS, Linux/Android, and Windows, plus x86_64 backends for macOS, Linux, and Windows.");
     }
 }
 

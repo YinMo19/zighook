@@ -10,7 +10,8 @@ const HookError = @import("../error.zig").HookError;
 
 const current = switch (builtin.os.tag) {
     .macos, .ios, .linux => @import("unix/trap.zig"),
-    else => @compileError("zighook trap handling is currently implemented for Unix-family targets only."),
+    .windows => @import("windows/trap.zig"),
+    else => @compileError("zighook trap handling is currently implemented for Unix-family targets and Windows only."),
 };
 
 /// Installs the process-global trap backend the first time a hook is

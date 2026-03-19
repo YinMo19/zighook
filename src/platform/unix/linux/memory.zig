@@ -70,6 +70,14 @@ pub fn freeTrampolinePage(trampoline_pc: u64) void {
     std.posix.munmap(ptr[0..page_size]);
 }
 
+/// Converts a writable trampoline page into an RX page once code emission is
+/// complete.
+pub fn sealTrampolinePage(page: []align(std.heap.page_size_min) u8) HookError!void {
+    std.posix.mprotect(page, std.posix.PROT.READ | std.posix.PROT.EXEC) catch {
+        return error.TrampolineProtectFailed;
+    };
+}
+
 fn fallbackAllocateTrampolinePage(address_hint: u64) HookError![]align(std.heap.page_size_min) u8 {
     const page_size = std.heap.pageSize();
     const page_mask = @as(u64, @intCast(page_size - 1));

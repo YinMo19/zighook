@@ -8,8 +8,9 @@ Current scope:
 - iOS
 - Linux
 - Android
+- Windows
 - AArch64 / ARM64
-- x86_64 (macOS / Linux)
+- x86_64 (macOS / Linux / Windows)
 
 Implemented APIs:
 
@@ -29,7 +30,7 @@ Implemented APIs:
 The current backends support:
 
 - trap-based instrumentation via `brk` (AArch64) or `int3` (x86_64)
-- signal-based entry hooks on AArch64 and x86_64
+- signal/exception-based entry hooks on AArch64 and x86_64
 - strict execute-original replay for common AArch64 PC-relative instructions
 - Zydis-backed x86_64 instruction decoding plus trampoline replay
 - public callback access to AArch64 FP/SIMD state (`fpregs.v[i]`, `fpregs.named.v0..v31`, `fpsr`, `fpcr`)
@@ -44,11 +45,13 @@ Implemented AArch64 platform backends:
 - `aarch64-ios`
 - `aarch64-linux`
 - `aarch64-linux-android` at the code/backend level via the Linux-family signal path
+- `aarch64-windows` at the code/backend level via the Windows exception path
 
 Implemented x86_64 platform backends:
 
 - `x86_64-macos`
 - `x86_64-linux`
+- `x86_64-windows`
 
 Verification status:
 
@@ -58,6 +61,11 @@ Verification status:
 - Android AArch64: compiled core/payload objects against a local NDK sysroot
 - Linux x86_64: runtime-tested in CI
 - macOS x86_64: core library and example payload cross-compiled
+- Windows x86_64: core library cross-compiled
+- Windows AArch64: core library cross-compiled
+
+Windows support is currently build-validated but not yet covered by a runtime
+smoke test.
 
 x86_64 replay coverage:
 
@@ -89,6 +97,7 @@ Deployment model by platform:
 - Linux: runtime patching or prepatched trap sites, usually with `LD_PRELOAD` or `patchelf`
 - iOS: recommended prepatched trap sites plus inserted dylib + re-sign
 - Android: Linux-family backend plus sidecar `.so`, typically loaded via patched ELF metadata / app packaging
+- Windows: explicit sidecar DLL load, or an external injector / launcher that loads the hook DLL before patch-point use
 
 Current execute-original replay whitelist for PC-relative AArch64 instructions:
 

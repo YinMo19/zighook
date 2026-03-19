@@ -43,6 +43,9 @@ pub const HookError = error{
     /// Registering a signal handler with `sigaction` failed.
     SignalHandlerInstallFailed,
 
+    /// Registering a process-global trap / exception handler failed.
+    TrapHandlerInstallFailed,
+
     /// The signal handler did not receive a context shape that matches the
     /// backend assumptions.
     UnexpectedSignalContext,

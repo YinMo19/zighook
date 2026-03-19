@@ -5,7 +5,7 @@ These examples mirror the intent of the Rust `sighook` demos.
 Current coverage:
 
 - **AArch64 / ARM64:** macOS / iOS / Linux / Android
-- **x86_64:** macOS / Linux with entry hooks and instruction-level replay
+- **x86_64:** macOS / Linux with entry hooks and instruction-level replay, plus Windows runtime smoke
 
 Each example directory is intentionally a standalone mini-project with exactly:
 
@@ -22,6 +22,9 @@ The example payloads now auto-select the constructor section:
 
 - Mach-O (`macOS`, `iOS`): `__DATA,__mod_init_func`
 - ELF (`Linux`, `Android`): `.init_array`
+
+Windows uses an explicit `LoadLibrary(...)` + exported install function instead
+of a constructor-based preload path.
 
 Common build pattern from inside an example directory:
 
@@ -66,7 +69,8 @@ Available examples:
 - `instrument_no_original`: trap one instruction and replace it, expected output `result=99`
 - `instrument_unhook_restore`: install a trap hook, call `unhook`, and confirm restoration, expected output `hooked=123` then `restored=5`
 - `prepatched_inline_hook`: use `prepatched.inline_hook(...)` on a binary that already contains `brk`, expected output `result=77`
+- `windows_inline_hook_smoke`: explicit Windows DLL load + `inline_hook(...)`, expected output `result=42`
 
 Each example README contains the exact commands and expected output. CI executes
-the documented runtime smokes on both macOS and Linux and compares stdout
+the documented runtime smokes on macOS, Linux, and Windows and compares stdout
 against those values.

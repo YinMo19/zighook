@@ -371,3 +371,54 @@ jobs:
             -lc
           output="$(LD_PRELOAD="$PWD/hook.so" ./target)"
           test "$output" = "result=77"
+
+  zig-windows-x86_64:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Zig
+        shell: pwsh
+        run: |
+          $archive = "zig-x86_64-windows-$env:ZIG_VERSION.zip"
+          $tmpdir = Join-Path $env:RUNNER_TEMP ("zig-" + [System.Guid]::NewGuid().ToString())
+          New-Item -ItemType Directory -Path $tmpdir | Out-Null
+          $url = "https://ziglang.org/download/$env:ZIG_VERSION/$archive"
+          Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmpdir $archive)
+          Expand-Archive -Path (Join-Path $tmpdir $archive) -DestinationPath $tmpdir
+          $zigDir = Join-Path $tmpdir ("zig-x86_64-windows-" + $env:ZIG_VERSION)
+          $zigDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & (Join-Path $zigDir "zig.exe") version
+
+      - name: Zig fmt
+        shell: bash
+        run: zig fmt --check $(git ls-files '*.zig')
+
+      - name: Zig build
+        shell: bash
+        run: zig build
+
+      - name: Cross compile Windows AArch64 core
+        shell: bash
+        run: zig build -Dtarget=aarch64-windows-gnu
+
+      - name: Resolve Zydis bridge path
+        shell: bash
+        run: echo "ZYDIS_BRIDGE_C=$(./scripts/zydis-package-path.sh bridge-c)" >> "$GITHUB_ENV"
+
+      - name: Example windows_inline_hook_smoke
+        shell: bash
+        working-directory: examples/windows_inline_hook_smoke
+        run: |
+          set -euo pipefail
+          zig cc -O3 -DNDEBUG -o target.exe target.c
+          zig build-lib -dynamic -OReleaseFast -femit-bin=hook.dll \
+            "$ZYDIS_BRIDGE_C" \
+            --dep zighook \
+            -Mroot=hook.zig \
+            -Mzighook=../../src/root.zig \
+            -lc
+          output="$(./target.exe | tr -d '\r')"
+          test "$output" = "result=42"

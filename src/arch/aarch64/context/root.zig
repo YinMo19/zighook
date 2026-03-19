@@ -2,8 +2,8 @@
 //!
 //! Files under `context/` are split by responsibility:
 //! - `types.zig`: stable public register/context layout
-//! - `darwin.zig`: Darwin signal-frame bridge
-//! - `linux.zig`: Linux / Android signal-frame bridge
+//! - `unix/*`: Darwin and Linux-family signal-frame bridges
+//! - `windows.zig`: Windows `CONTEXT` bridge
 //! - `root.zig`: backend selector and public re-exports
 //!
 //! The register layout itself is OS-independent, but the signal-frame bridge is
@@ -11,14 +11,16 @@
 //! - Darwin (`macOS`, `iOS`) remaps from `mcontext.ss + mcontext.ns`
 //! - Linux-family targets (`Linux`, `Android`) remap from `ucontext_t` plus
 //!   AArch64 extension records stored in the reserved signal-frame area
+//! - Windows remaps from the native ARM64 `CONTEXT` record used by VEH / SEH
 
 const builtin = @import("builtin");
 
 const types = @import("types.zig");
 const backend = switch (builtin.os.tag) {
-    .macos, .ios => @import("darwin.zig"),
-    .linux => @import("linux.zig"),
-    else => @compileError("AArch64 signal-context remapping is only implemented for Darwin and Linux-family targets."),
+    .macos, .ios => @import("unix/darwin.zig"),
+    .linux => @import("unix/linux.zig"),
+    .windows => @import("windows.zig"),
+    else => @compileError("AArch64 context remapping is only implemented for Darwin, Linux-family targets, and Windows."),
 };
 
 pub const XRegistersNamed = types.XRegistersNamed;

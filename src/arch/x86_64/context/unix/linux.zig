@@ -6,7 +6,7 @@ const linux = std.os.linux;
 const REG = linux.REG;
 const LinuxMContext = linux.mcontext_t;
 
-const types = @import("types.zig");
+const types = @import("../types.zig");
 
 /// Linux x86_64 stores the architectural segment selectors inside the packed
 /// `REG.CSGSFS` greg slot. Keeping this layout explicit makes the trap-frame

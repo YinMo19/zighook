@@ -93,6 +93,19 @@ pub fn freeTrampolinePage(trampoline_pc: u64) void {
     std.posix.munmap(ptr[0..page_size]);
 }
 
+/// Converts a writable trampoline page into an RX page once code emission is
+/// complete.
+pub fn sealTrampolinePage(page: []align(std.heap.page_size_min) u8) HookError!void {
+    const kr = std.c.mach_vm_protect(
+        std.c.mach_task_self(),
+        @intFromPtr(page.ptr),
+        page.len,
+        0,
+        std.c.PROT.READ | std.c.PROT.EXEC,
+    );
+    if (kr != 0) return error.TrampolineProtectFailed;
+}
+
 fn computeProtectRange(address: usize, len: usize) ProtectRange {
     const page_size = std.heap.pageSize();
     const start = address & ~(page_size - 1);

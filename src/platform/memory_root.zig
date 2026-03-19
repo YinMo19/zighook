@@ -18,7 +18,8 @@ pub const TrampolineKind = @import("types.zig").TrampolineKind;
 const current = switch (builtin.os.tag) {
     .macos, .ios => @import("unix/darwin/memory.zig"),
     .linux => @import("unix/linux/memory.zig"),
-    else => @compileError("zighook executable-memory helpers are currently implemented for Darwin and Linux only."),
+    .windows => @import("windows/memory.zig"),
+    else => @compileError("zighook executable-memory helpers are currently implemented for Darwin, Linux-family targets, and Windows."),
 };
 
 /// Writes replacement machine code bytes into the current process image.
@@ -41,4 +42,10 @@ pub fn allocateTrampolinePage(address_hint: u64, kind: TrampolineKind) HookError
 /// `allocateTrampolinePage(...)`.
 pub fn freeTrampolinePage(trampoline_pc: u64) void {
     current.freeTrampolinePage(trampoline_pc);
+}
+
+/// Converts a writable trampoline page into its final executable protection
+/// state after all trampoline bytes have been emitted.
+pub fn sealTrampolinePage(page: []align(std.heap.page_size_min) u8) HookError!void {
+    return current.sealTrampolinePage(page);
 }

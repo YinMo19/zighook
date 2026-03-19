@@ -69,3 +69,9 @@ pub fn allocateTrampolinePage(address_hint: u64, kind: TrampolineKind) HookError
 pub fn freeTrampolinePage(trampoline_pc: u64) void {
     platform_memory.freeTrampolinePage(trampoline_pc);
 }
+
+/// Finalizes a trampoline page after code emission by switching it from
+/// writable staging memory to executable runtime memory.
+pub fn sealTrampolinePage(page: []align(std.heap.page_size_min) u8) HookError!void {
+    return platform_memory.sealTrampolinePage(page);
+}

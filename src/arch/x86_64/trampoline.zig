@@ -299,10 +299,7 @@ pub fn createOriginalTrampoline(address: u64, original_bytes: []const u8, step_l
 
     // Complete all writes before RX protection is restored.
     memory.flushInstructionCache(mapped.ptr, emitter.offset);
-
-    std.posix.mprotect(mapped, std.posix.PROT.READ | std.posix.PROT.EXEC) catch {
-        return error.TrampolineProtectFailed;
-    };
+    try memory.sealTrampolinePage(mapped);
 
     return @intFromPtr(mapped.ptr);
 }
