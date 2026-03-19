@@ -44,6 +44,9 @@ jobs:
       - name: Zig test
         run: zig build test
 
+      - name: Resolve Zydis bridge path
+        run: echo "ZYDIS_BRIDGE_C=$(./scripts/zydis-package-path.sh bridge-c)" >> "$GITHUB_ENV"
+
       - name: Cross compile Linux AArch64 core and payload
         run: |
           set -euo pipefail
@@ -63,13 +66,11 @@ jobs:
           set -euo pipefail
           zig build-lib -dynamic -target x86_64-macos -OReleaseFast \
             -femit-bin=/tmp/libzighook_macos_x86_64.dylib \
-            src/root.zig c_deps/x86_64/decoder_zydis.c \
-            -I c_deps/zydis \
+            src/root.zig "$ZYDIS_BRIDGE_C" \
             -lc
           zig build-lib -dynamic -target x86_64-macos -OReleaseFast \
             -femit-bin=/tmp/inline_hook_signal_macos_x86_64.dylib \
-            c_deps/x86_64/decoder_zydis.c \
-            -I c_deps/zydis \
+            "$ZYDIS_BRIDGE_C" \
             --dep zighook \
             -Mroot=examples/inline_hook_signal/hook.zig \
             -Mzighook=src/root.zig \
@@ -193,6 +194,9 @@ jobs:
       - name: Zig test
         run: zig build test
 
+      - name: Resolve Zydis bridge path
+        run: echo "ZYDIS_BRIDGE_C=$(./scripts/zydis-package-path.sh bridge-c)" >> "$GITHUB_ENV"
+
       - name: Example inline_hook_signal
         working-directory: examples/inline_hook_signal
         run: |
@@ -300,8 +304,7 @@ jobs:
           set -euo pipefail
           cc -O3 -DNDEBUG -rdynamic -o target target.c -ldl
           zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
-            ../../c_deps/x86_64/decoder_zydis.c \
-            -I ../../c_deps/zydis \
+            "$ZYDIS_BRIDGE_C" \
             --dep zighook \
             -Mroot=hook.zig \
             -Mzighook=../../src/root.zig \
@@ -315,8 +318,7 @@ jobs:
           set -euo pipefail
           cc -O3 -DNDEBUG -rdynamic -o target target.c -ldl
           zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
-            ../../c_deps/x86_64/decoder_zydis.c \
-            -I ../../c_deps/zydis \
+            "$ZYDIS_BRIDGE_C" \
             --dep zighook \
             -Mroot=hook.zig \
             -Mzighook=../../src/root.zig \
@@ -330,8 +332,7 @@ jobs:
           set -euo pipefail
           cc -O3 -DNDEBUG -rdynamic -o target target.c -ldl
           zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
-            ../../c_deps/x86_64/decoder_zydis.c \
-            -I ../../c_deps/zydis \
+            "$ZYDIS_BRIDGE_C" \
             --dep zighook \
             -Mroot=hook.zig \
             -Mzighook=../../src/root.zig \
@@ -345,8 +346,7 @@ jobs:
           set -euo pipefail
           cc -O3 -DNDEBUG -rdynamic -o target target.c -ldl
           zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
-            ../../c_deps/x86_64/decoder_zydis.c \
-            -I ../../c_deps/zydis \
+            "$ZYDIS_BRIDGE_C" \
             --dep zighook \
             -Mroot=hook.zig \
             -Mzighook=../../src/root.zig \
@@ -361,8 +361,7 @@ jobs:
           set -euo pipefail
           cc -O3 -DNDEBUG -rdynamic -o target target.c -ldl
           zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
-            ../../c_deps/x86_64/decoder_zydis.c \
-            -I ../../c_deps/zydis \
+            "$ZYDIS_BRIDGE_C" \
             --dep zighook \
             -Mroot=hook.zig \
             -Mzighook=../../src/root.zig \

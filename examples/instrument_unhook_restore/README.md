@@ -31,9 +31,11 @@ cc -O3 -DNDEBUG -rdynamic -o target target.c -ldl
 ```
 
 ```bash
+(cd ../.. && zig build --fetch)
+ZYDIS_BRIDGE_C="$(../../scripts/zydis-package-path.sh bridge-c)"
+
 zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
-  ../../c_deps/x86_64/decoder_zydis.c \
-  -I ../../c_deps/zydis \
+  "$ZYDIS_BRIDGE_C" \
   --dep zighook \
   -Mroot=hook.zig \
   -Mzighook=../../src/root.zig \

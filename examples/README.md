@@ -39,12 +39,15 @@ DYLD_INSERT_LIBRARIES=$PWD/hook.dylib ./target
 
 That exact command sequence is still the canonical **macOS runtime smoke** for
 AArch64. On Linux, CI runs both AArch64 and x86_64 runtime smokes. Direct
-`x86_64` CLI builds also add the vendored Zydis shim:
+`x86_64` CLI builds first fetch the pinned `zydis-zig` package and then compile
+its bridge C source:
 
 ```bash
+(cd ../.. && zig build --fetch)
+ZYDIS_BRIDGE_C="$(../../scripts/zydis-package-path.sh bridge-c)"
+
 zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
-  ../../c_deps/x86_64/decoder_zydis.c \
-  -I ../../c_deps/zydis \
+  "$ZYDIS_BRIDGE_C" \
   --dep zighook \
   -Mroot=hook.zig \
   -Mzighook=../../src/root.zig \

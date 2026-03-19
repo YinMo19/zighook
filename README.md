@@ -141,13 +141,15 @@ zig build-lib -dynamic -OReleaseFast -femit-bin=hook.dylib \
 DYLD_INSERT_LIBRARIES=$PWD/hook.dylib ./target
 ```
 
-When you build a hook payload for `x86_64` directly with `zig build-lib`,
-include the vendored Zydis shim C file as well:
+When you build a hook payload for `x86_64` directly with `zig build-lib`, fetch
+the pinned `zydis-zig` package once and then compile its bridge C file:
 
 ```bash
+(cd ../.. && zig build --fetch)
+ZYDIS_BRIDGE_C="$(../../scripts/zydis-package-path.sh bridge-c)"
+
 zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
-  ../../c_deps/x86_64/decoder_zydis.c \
-  -I ../../c_deps/zydis \
+  "$ZYDIS_BRIDGE_C" \
   --dep zighook \
   -Mroot=hook.zig \
   -Mzighook=../../src/root.zig \

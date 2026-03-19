@@ -34,12 +34,15 @@ zig build-lib -dynamic -OReleaseFast -femit-bin=hook.dylib \
   -lc
 ```
 
-Linux x86_64 uses the Zydis shim C source as well:
+Linux x86_64 fetches the pinned `zydis-zig` package and compiles its bridge C
+source as well:
 
 ```bash
+(cd ../.. && zig build --fetch)
+ZYDIS_BRIDGE_C="$(../../scripts/zydis-package-path.sh bridge-c)"
+
 zig build-lib -dynamic -OReleaseFast -femit-bin=hook.so \
-  ../../c_deps/x86_64/decoder_zydis.c \
-  -I ../../c_deps/zydis \
+  "$ZYDIS_BRIDGE_C" \
   --dep zighook \
   -Mroot=hook.zig \
   -Mzighook=../../src/root.zig \
